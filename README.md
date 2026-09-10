@@ -152,3 +152,47 @@ found only one input that passed every check:
 
 When I supplied this input to the circuit in my testbench, the circuit set the
 success pin high and printed the message *(\* TWO STARS \*)* to the O pins.
+
+## Output module analysis
+
+Previously I identified that the circuit derived the secret message based on
+the input bitstring to prevent someone from extracting the secret message
+without the correct input. I reconstructed the secret message computation by
+analyzing the output module netlist and by applying guess-and-check with my
+testbench:
+
+```python
+out = [0x8a, 0x6a, 0x3e, 0x46, 0xd6, 0xbc, 0xd9, 0x70, 0xbe, 0xa4, 0x02, 0xad, 0x56, 0x30, 0x4a]
+reg = [0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01, 0x00, 0x00, 0x01, 0x01, 0x01, 0x01, 0x01, 0x01]
+def compute_output(I):
+    # lfsr
+    # initial state: 0xa5
+    # feedback poly: 0xb8
+    csum = 0xa5
+    for idx in range(121):
+        csum_ = csum
+        csum = ((csum << 1) ^ b(I, idx) ^ b(csum, 3) ^ b(csum, 4) ^ b(csum, 5) ^ b(csum, 7)) & 0xff
+    data = b(csum_, 0)
+    msg = bytearray()
+    for idx, (succ, init) in enumerate(zip(out, reg)):
+        msg.append(succ ^ csum ^ 0b1100111)
+        # lfsr with feedback poly, formulated as a companion matrix, applied 8 times
+        csum0 = b(csum, 2) ^ b(csum, 5) ^ b(csum, 6)
+        csum1 = b(csum, 3) ^ b(csum, 6) ^ b(csum, 7)              ^ init
+        csum2 = b(csum, 0) ^ b(csum, 5) ^ b(csum, 6) ^ b(csum, 7)
+        csum3 = b(csum, 0) ^ b(csum, 4) ^ b(csum, 5) ^ b(csum, 7) ^ data
+        csum4 = b(csum, 0) ^ b(csum, 2) ^ b(csum, 4)              ^ data
+        csum5 = b(csum, 2) ^ b(csum, 3) ^ b(csum, 5)              ^ data
+        csum6 = b(csum, 2) ^ b(csum, 3) ^ b(csum, 4) ^ b(csum, 6)
+        csum7 = b(csum, 3) ^ b(csum, 4) ^ b(csum, 5) ^ b(csum, 7)
+        data = b(csum, 7) ^ b(csum, 6) ^ b(csum, 3)
+        csum = (csum0 << 0) | (csum1 << 1) | (csum2 << 2) | (csum3 << 3) | \
+               (csum4 << 4) | (csum5 << 5) | (csum6 << 6) | (csum7 << 7)
+    return msg
+```
+
+The circuit computes an LFSR over the input bitstring with an initial state of
+0xa5 and with a feedback polynomial of 0xb8 ($x^7 + x^5 + x^4 + x^3$). Then,
+the circuit derives the secret output using some formulation of the original
+LFSR using its companion matrix applied 8 times
+(XREF [wikipedia](https://en.wikipedia.org/wiki/Linear-feedback_shift_register#Matrix_forms)).
